@@ -43,8 +43,9 @@
 #include "lcd.h"
 #include "submcu.h"
 #include "midi.h"
-#include "utf8main.h"
+//#include "utf8main.h"
 #include "utils/files.h"
+#include "windows.h"
 
 #if __linux__
 #include <unistd.h>
@@ -61,35 +62,41 @@ const char* rs_name[ROM_SET_COUNT] = {
 
 const char* roms[ROM_SET_COUNT][5] =
 {
-    "rom1.bin",
-    "rom2.bin",
-    "waverom1.bin",
-    "waverom2.bin",
-    "rom_sm.bin",
-
-    "rom1.bin",
-    "rom2_st.bin",
-    "waverom1.bin",
-    "waverom2.bin",
-    "rom_sm.bin",
-
-    "sc55_rom1.bin",
-    "sc55_rom2.bin",
-    "sc55_waverom1.bin",
-    "sc55_waverom2.bin",
-    "sc55_waverom3.bin",
-
-    "cm300_rom1.bin",
-    "cm300_rom2.bin",
-    "cm300_waverom1.bin",
-    "cm300_waverom2.bin",
-    "cm300_waverom3.bin",
-
-    "jv880_rom1.bin",
-    "jv880_rom2.bin",
-    "jv880_waverom1.bin",
-    "jv880_waverom2.bin",
-    "jv880_waverom_expansion.bin",
+    {
+        "rom1.bin",
+        "rom2.bin",
+        "waverom1.bin",
+        "waverom2.bin",
+        "rom_sm.bin"
+    },
+    {
+        "rom1.bin",
+        "rom2_st.bin",
+        "waverom1.bin",
+        "waverom2.bin",
+        "rom_sm.bin"
+    },
+    {
+        "sc55_rom1.bin",
+        "sc55_rom2.bin",
+        "sc55_waverom1.bin",
+        "sc55_waverom2.bin",
+        "sc55_waverom3.bin"
+    },
+    {
+        "cm300_rom1.bin",
+        "cm300_rom2.bin",
+        "cm300_waverom1.bin",
+        "cm300_waverom2.bin",
+        "cm300_waverom3.bin"
+    },
+    {
+        "jv880_rom1.bin",
+        "jv880_rom2.bin",
+        "jv880_waverom1.bin",
+        "jv880_waverom2.bin",
+        "jv880_waverom_expansion.bin"
+    }
 };
 
 int romset = ROM_SET_MK2;
@@ -102,10 +109,9 @@ static const int NVRAM_SIZE = 0x8000; // JV880 only
 static const int CARDRAM_SIZE = 0x8000; // JV880 only
 static const int ROMSM_SIZE = 0x1000;
 
-
 static int audio_buffer_size;
 static int audio_page_size;
-static short *sample_buffer;
+static float* sample_buffer;
 
 static int sample_read_ptr;
 static int sample_write_ptr;
@@ -130,8 +136,6 @@ static int ga_lcd_counter = 0;
 
 uint8_t dev_register[0x80];
 
-static uint16_t ad_val[4];
-static uint8_t ad_nibble = 0x00;
 static uint8_t sw_pos = 3;
 static uint8_t io_sd = 0x00;
 
@@ -492,24 +496,25 @@ uint8_t MCU_Read(uint32_t address)
             if (!mcu_mk1)
             {
                 uint16_t base = mcu_jv880 ? 0xf000 : 0xe000;
-                if (address >= base && address < (base | 0x400))
+                if (address >= 0x8000 && address < 0xe000)
+                {
+                    ret = sram[address & 0x7fff];
+                }
+                else if (address >= 0xfb80 && address < 0xff80
+                    && (dev_register[DEV_RAME] & 0x80) != 0) {
+                    ret = ram[(address - 0xfb80) & 0x3ff];
+                }
+                else if (address >= 0xff80)
+                {
+                    ret = MCU_DeviceRead(address & 0x7f);
+                }
+                else if (address >= base && address < (base | 0x400))
                 {
                     ret = PCM_Read(address & 0x3f);
                 }
                 else if (address >= 0xec00 && address < 0xf000)
                 {
                     ret = SM_SysRead(address & 0xff);
-                }
-                else if (address >= 0xff80)
-                {
-                    ret = MCU_DeviceRead(address & 0x7f);
-                }
-                else if (address >= 0xfb80 && address < 0xff80
-                    && (dev_register[DEV_RAME] & 0x80) != 0)
-                    ret = ram[(address - 0xfb80) & 0x3ff];
-                else if (address >= 0x8000 && address < 0xe000)
-                {
-                    ret = sram[address & 0x7fff];
                 }
                 else if (address == (base | 0x402))
                 {
@@ -596,17 +601,17 @@ uint8_t MCU_Read(uint32_t address)
         ret = rom2[address | 0x10000];
         break;
 #endif
+    case 4:
+    case 3:
     case 1:
-        ret = rom2[address_rom & rom2_mask];
-        break;
     case 2:
         ret = rom2[address_rom & rom2_mask];
         break;
-    case 3:
-        ret = rom2[address_rom & rom2_mask];
-        break;
-    case 4:
-        ret = rom2[address_rom & rom2_mask];
+    case 10:
+        if (!mcu_mk1)
+            ret = sram[address & 0x7fff]; // FIXME
+        else
+            ret = 0xff;
         break;
     case 8:
         if (!mcu_jv880)
@@ -627,23 +632,15 @@ uint8_t MCU_Read(uint32_t address)
         else
             ret = cardram[address & 0x7fff]; // FIXME
         break;
-    case 10:
-    case 11:
-        if (!mcu_mk1)
-            ret = sram[address & 0x7fff]; // FIXME
-        else
-            ret = 0xff;
-        break;
-    case 12:
-    case 13:
-        if (mcu_jv880)
-            ret = nvram[address & 0x7fff]; // FIXME
-        else
-            ret = 0xff;
-        break;
     case 5:
         if (mcu_mk1)
             ret = sram[address & 0x7fff]; // FIXME
+        else
+            ret = 0xff;
+        break;
+    case 13:
+        if (mcu_jv880)
+            ret = nvram[address & 0x7fff]; // FIXME
         else
             ret = 0xff;
         break;
@@ -863,6 +860,7 @@ void MCU_Reset(void)
     {
         ga_int_enable = 255;
     }
+    TIMER_Reset();
 }
 
 void MCU_PostUART(uint8_t data)
@@ -910,21 +908,24 @@ void MCU_UpdateUART_TX(void)
 
 static bool work_thread_run = false;
 
-static SDL_mutex *work_thread_lock;
+//static SDL_mutex *work_thread_lock;
 
 void MCU_WorkThread_Lock(void)
 {
-    SDL_LockMutex(work_thread_lock);
+    //SDL_LockMutex(work_thread_lock);
 }
 
 void MCU_WorkThread_Unlock(void)
 {
-    SDL_UnlockMutex(work_thread_lock);
+    //SDL_UnlockMutex(work_thread_lock);
 }
 
 int SDLCALL work_thread(void* data)
 {
-    work_thread_lock = SDL_CreateMutex();
+    (void)data;
+    //work_thread_lock = SDL_CreateMutex();
+
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
     MCU_WorkThread_Lock();
     while (work_thread_run)
@@ -985,7 +986,7 @@ int SDLCALL work_thread(void* data)
     }
     MCU_WorkThread_Unlock();
 
-    SDL_DestroyMutex(work_thread_lock);
+    //SDL_DestroyMutex(work_thread_lock);
 
     return 0;
 }
@@ -1081,10 +1082,9 @@ void unscramble(uint8_t *src, uint8_t *dst, int len)
 
 void audio_callback(void* /*userdata*/, Uint8* stream, int len)
 {
-    len /= 2;
-    memcpy(stream, &sample_buffer[sample_read_ptr], len * 2);
-    memset(&sample_buffer[sample_read_ptr], 0, len * 2);
-    sample_read_ptr += len;
+    memcpy(stream, &sample_buffer[sample_read_ptr], len);
+    memset(&sample_buffer[sample_read_ptr], 0, len);
+    sample_read_ptr += len / sizeof(float);
     sample_read_ptr %= audio_buffer_size;
 }
 
@@ -1121,16 +1121,16 @@ int MCU_OpenAudio(int deviceIndex, int pageSize, int pageNum)
     SDL_AudioSpec spec = {};
     SDL_AudioSpec spec_actual = {};
 
-    audio_page_size = (pageSize/2)*2; // must be even
-    audio_buffer_size = audio_page_size*pageNum;
-    
-    spec.format = AUDIO_S16SYS;
+    audio_page_size = (pageSize / 2) * 2; // must be even
+    audio_buffer_size = audio_page_size * pageNum;
+
+    spec.format = AUDIO_F32SYS;
     spec.freq = (mcu_mk1 || mcu_jv880) ? 64000 : 66207;
     spec.channels = 2;
     spec.callback = audio_callback;
     spec.samples = audio_page_size / 4;
-    
-    sample_buffer = (short*)calloc(audio_buffer_size, sizeof(short));
+
+    sample_buffer = (float*)calloc(audio_buffer_size, sizeof(float));
     if (!sample_buffer)
     {
         printf("Cannot allocate audio buffer.\n");
@@ -1173,7 +1173,7 @@ int MCU_OpenAudio(int deviceIndex, int pageSize, int pageNum)
            spec_actual.channels,
            spec_actual.freq,
            spec_actual.samples);
-    fflush(stdout);
+    fflush(stdout);    
 
     SDL_PauseAudioDevice(sdl_audio, 0);
 
@@ -1188,18 +1188,11 @@ void MCU_CloseAudio(void)
 
 void MCU_PostSample(int *sample)
 {
-    sample[0] >>= 15;
-    if (sample[0] > INT16_MAX)
-        sample[0] = INT16_MAX;
-    else if (sample[0] < INT16_MIN)
-        sample[0] = INT16_MIN;
-    sample[1] >>= 15;
-    if (sample[1] > INT16_MAX)
-        sample[1] = INT16_MAX;
-    else if (sample[1] < INT16_MIN)
-        sample[1] = INT16_MIN;
-    sample_buffer[sample_write_ptr + 0] = sample[0];
-    sample_buffer[sample_write_ptr + 1] = sample[1];
+    const float divRec = 1 / 32768.0f;
+    sample[0] >>= 14;   
+    sample[1] >>= 14;   
+    sample_buffer[sample_write_ptr + 0] = sample[0] * divRec;
+    sample_buffer[sample_write_ptr + 1] = sample[1] * divRec;
     sample_write_ptr = (sample_write_ptr + 2) % audio_buffer_size;
 }
 
@@ -1255,21 +1248,21 @@ void MIDI_Reset(ResetType resetType)
     const unsigned char gmReset[] = { 0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7 };
     const unsigned char gsReset[] = { 0xF0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7F, 0x00, 0x41, 0xF7 };
     
+    uint8_t i;
     if (resetType == ResetType::GS_RESET)
     {
-        for (size_t i = 0; i < sizeof(gsReset); i++)
+        for (i = 0; i < sizeof(gsReset); i++)
         {
             MCU_PostUART(gsReset[i]);
         }
     }
-    else  if (resetType == ResetType::GM_RESET)
+    else if (resetType == ResetType::GM_RESET)
     {
-        for (size_t i = 0; i < sizeof(gmReset); i++)
+        for (i = 0; i < sizeof(gmReset); i++)
         {
             MCU_PostUART(gmReset[i]);
         }
     }
-
 }
 
 int main(int argc, char *argv[])
@@ -1277,10 +1270,12 @@ int main(int argc, char *argv[])
     (void)argc;
     std::string basePath;
 
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+
     int port = 0;
     int audioDeviceIndex = -1;
-    int pageSize = 512;
-    int pageNum = 32;
+    int pageSize = 2048;
+    int pageNum = 4;
     bool autodetect = true;
     ResetType resetType = ResetType::NONE;
 
@@ -1300,7 +1295,7 @@ int main(int argc, char *argv[])
             else if (!strncmp(argv[i], "-ab:", 4))
             {
                 char* pColon = argv[i] + 3;
-                
+
                 if (pColon[1] != 0)
                 {
                     pageSize = atoi(++pColon);
@@ -1310,7 +1305,7 @@ int main(int argc, char *argv[])
                         pageNum = atoi(++pColon);
                     }
                 }
-                
+
                 // reset both if either is invalid
                 if (pageSize <= 0 || pageNum <= 0)
                 {
@@ -1351,6 +1346,27 @@ int main(int argc, char *argv[])
             {
                 resetType = ResetType::GM_RESET;
             }
+            else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "-help") || !strcmp(argv[i], "--help"))
+            {
+                // TODO: Might want to try to find a way to print out the executable's actual name (without any full paths).
+                printf("Usage: nuked-sc55 [options]\n");
+                printf("Options:\n");
+                printf("  -h, -help, --help              Display this information.\n");
+                printf("\n");
+                printf("  -p:<port_number>               Set MIDI port.\n");
+                printf("  -a:<device_number>             Set Audio Device index.\n");
+                printf("  -ab:<page_size>:[page_count]   Set Audio Buffer size.\n");
+                printf("\n");
+                printf("  -mk2                           Use SC-55mk2 ROM set.\n");
+                printf("  -st                            Use SC-55st ROM set.\n");
+                printf("  -mk1                           Use SC-55mk1 ROM set.\n");
+                printf("  -cm300                         Use CM-300/SCC-1 ROM set.\n");
+                printf("  -jv880                         Use JV-880 ROM set.\n");
+                printf("\n");
+                printf("  -gs                            Reset system in GS mode.\n");
+                printf("  -gm                            Reset system in GM mode.\n");
+                return 0;
+            }
         }
     }
 
@@ -1373,7 +1389,7 @@ int main(int argc, char *argv[])
 
     if (autodetect)
     {
-        for (size_t i = 0; i < ROM_SET_COUNT; i++)
+        for (int i = 0; i < ROM_SET_COUNT; i++)
         {
             bool good = true;
             for (size_t j = 0; j < 5; j++)
@@ -1468,7 +1484,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    size_t rom2_read = fread(rom2, 1, ROM2_SIZE, s_rf[1]);
+    int rom2_read = (int)fread(rom2, 1, ROM2_SIZE, s_rf[1]);
 
     if (rom2_read == ROM2_SIZE || rom2_read == ROM2_SIZE / 2)
     {
@@ -1603,7 +1619,7 @@ int main(int argc, char *argv[])
     PCM_Reset();
 
     if (resetType != ResetType::NONE) MIDI_Reset(resetType);
-    
+
     MCU_Run();
 
     MCU_CloseAudio();

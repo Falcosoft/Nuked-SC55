@@ -234,7 +234,11 @@ void SM_Write(uint16_t address, uint8_t data)
 void SM_SysWrite(uint32_t address, uint8_t data)
 {
     address &= 0xff;
-    if (address < 0xc0)
+    if (address == 0xf6)
+    {
+        MCU_WriteP0(data);
+    }
+    else if (address < 0xc0)
     {
         address &= 0xff;
         sm_access[address>>3] |= 1<<(address&7);
@@ -249,6 +253,10 @@ void SM_SysWrite(uint32_t address, uint8_t data)
             sm_device_mode[SM_DEV_SEMAPHORE] &= ~0x80;
         }
     }
+    else if (address == 0xf7)
+    {
+        sm_p0_dir = data;
+    }
     else if (address == 0xff)
     {
         sm_device_mode[SM_DEV_SEMAPHORE] &= ~0x1f;
@@ -257,14 +265,6 @@ void SM_SysWrite(uint32_t address, uint8_t data)
     else if (address == 0xf5)
     {
         MCU_WriteP1(data);
-    }
-    else if (address == 0xf6)
-    {
-        MCU_WriteP0(data);
-    }
-    else if (address == 0xf7)
-    {
-        sm_p0_dir = data;
     }
     else
     {
@@ -275,11 +275,20 @@ void SM_SysWrite(uint32_t address, uint8_t data)
 uint8_t SM_SysRead(uint32_t address)
 {
     address &= 0xff;
-    if (address < 0xc0)
+    if (address == 0xf5)
     {
-        if ((sm_device_mode[SM_DEV_RAM_DIR] & (1<<(address>>5))) == 0)
+        return MCU_ReadP1();
+    }
+    else if (address < 0xc0)
+    {
+        if ((sm_device_mode[SM_DEV_RAM_DIR] & (1<<(address>>5))) == 0) {
             sm_access[address>>3] &= ~(1<<(address&7));
+        }
         return sm_shared_ram[address];
+    }
+    else if (address == 0xff)
+    {
+        return sm_device_mode[SM_DEV_SEMAPHORE];
     }
     else if (address >= 0xf8 && address < 0xfc)
     {
@@ -290,14 +299,6 @@ uint8_t SM_SysRead(uint32_t address)
         uint8_t val = sm_device_mode[SM_DEV_IPCE0 + (address & 3)];
         sm_device_mode[SM_DEV_IPCE0 + (address & 3)] = 0; // FIXME
         return val;
-    }
-    else if (address == 0xff)
-    {
-        return sm_device_mode[SM_DEV_SEMAPHORE];
-    }
-    else if (address == 0xf5)
-    {
-        return MCU_ReadP1();
     }
     else if (address == 0xf6)
     {
@@ -314,14 +315,14 @@ uint8_t SM_SysRead(uint32_t address)
     }
 }
 
-uint16_t SM_GetVectorAddress(uint32_t vector)
+inline uint16_t SM_GetVectorAddress(uint32_t vector)
 {
     uint16_t pc = SM_Read(0x1fec + vector * 2);
     pc |= SM_Read(0x1fec + vector * 2 + 1) << 8;
     return pc;
 }
 
-void SM_SetStatus(uint32_t condition, uint32_t mask)
+inline void SM_SetStatus(uint32_t condition, uint32_t mask)
 {
     if (condition)
         sm.sr |= mask;
@@ -335,40 +336,40 @@ void SM_Reset(void)
     sm.pc = SM_GetVectorAddress(SM_VECTOR_RESET);
 }
 
-uint8_t SM_ReadAdvance(void)
+inline uint8_t SM_ReadAdvance(void)
 {
     uint8_t byte = SM_Read(sm.pc);
     sm.pc++;
     return byte;
 }
 
-uint16_t SM_ReadAdvance16(void)
+inline uint16_t SM_ReadAdvance16(void)
 {
     uint16_t word = SM_ReadAdvance();
     word |= SM_ReadAdvance() << 8;
     return word;
 }
 
-uint16_t SM_Read16(uint16_t address)
+inline uint16_t SM_Read16(uint16_t address)
 {
     uint16_t word = SM_Read(address);
     word |= SM_Read(address) << 8;
     return word;
 }
 
-void SM_Update_NZ(uint8_t val)
+inline void SM_Update_NZ(uint8_t val)
 {
     SM_SetStatus(val == 0, SM_STATUS_Z);
     SM_SetStatus(val & 0x80, SM_STATUS_N);
 }
 
-void SM_PushStack(uint8_t data)
+inline void SM_PushStack(uint8_t data)
 {
     SM_Write(sm.s, data);
     sm.s--;
 }
 
-uint8_t SM_PopStack(void)
+inline uint8_t SM_PopStack(void)
 {
     sm.s++;
     return SM_Read(sm.s);
@@ -376,21 +377,25 @@ uint8_t SM_PopStack(void)
 
 void SM_Opcode_NotImplemented(uint8_t opcode)
 {
+    (void)opcode;
     SM_ErrorTrap();
 }
 
 void SM_Opcode_SEI(uint8_t opcode) // 78
 {
+    (void)opcode;
     SM_SetStatus(1, SM_STATUS_I);
 }
 
 void SM_Opcode_CLD(uint8_t opcode) // d8
 {
+    (void)opcode;
     SM_SetStatus(0, SM_STATUS_D);
 }
 
 void SM_Opcode_CLT(uint8_t opcode) // 12
 {
+    (void)opcode;
     SM_SetStatus(0, SM_STATUS_T);
 }
 
@@ -421,11 +426,13 @@ void SM_Opcode_LDX(uint8_t opcode) // a2, a6, ae, b6, be
 
 void SM_Opcode_TXS(uint8_t opcode) // 9a
 {
+    (void)opcode;
     sm.s = sm.x;
 }
 
 void SM_Opcode_TXA(uint8_t opcode) // 8a
 {
+    (void)opcode;
     sm.a = sm.x;
     SM_Update_NZ(sm.a);
 }
@@ -463,31 +470,17 @@ void SM_Opcode_STA(uint8_t opcode) // 85, 95, 8d, 9d, 99, 81, 91
 
 void SM_Opcode_INX(uint8_t opcode) // e8
 {
+    (void)opcode;
     sm.x++;
     SM_Update_NZ(sm.x);
 }
 
 void SM_Opcode_BBC_BBS(uint8_t opcode)
 {
-    int32_t zp = (opcode & 4) != 0;
-    int32_t bit = (opcode >> 5) & 7;
-    int32_t type = (opcode >> 4) & 1;
-    uint8_t val = 0;
+    uint8_t val = !(opcode & 4) ? sm.a : SM_Read(SM_ReadAdvance());
+    uint8_t diff = SM_ReadAdvance();
 
-    if (!zp)
-    {
-        val = sm.a;
-    }
-    else
-    {
-        val = SM_Read(SM_ReadAdvance());
-    }
-
-    int8_t diff = SM_ReadAdvance();
-
-    int32_t set = (val >> bit) & 1;
-    
-    if (set != type)
+    if (((val >> ((opcode >> 5) & 7)) & 1) != ((opcode >> 4) & 1))
         sm.pc += diff;
 }
 
@@ -513,6 +506,7 @@ void SM_Opcode_CPX(uint8_t opcode) // e0, e4, ec
 
 void SM_Opcode_BEQ(uint8_t opcode) // f0
 {
+    (void)opcode;
     int8_t diff = SM_ReadAdvance();
     if ((sm.sr & SM_STATUS_Z) != 0)
         sm.pc += diff;
@@ -520,6 +514,7 @@ void SM_Opcode_BEQ(uint8_t opcode) // f0
 
 void SM_Opcode_BCC(uint8_t opcode) // 90
 {
+    (void)opcode;
     int8_t diff = SM_ReadAdvance();
     if ((sm.sr & SM_STATUS_C) == 0)
         sm.pc += diff;
@@ -527,6 +522,7 @@ void SM_Opcode_BCC(uint8_t opcode) // 90
 
 void SM_Opcode_BCS(uint8_t opcode) // b0
 {
+    (void)opcode;
     int8_t diff = SM_ReadAdvance();
     if ((sm.sr & SM_STATUS_C) != 0)
         sm.pc += diff;
@@ -534,6 +530,7 @@ void SM_Opcode_BCS(uint8_t opcode) // b0
 
 void SM_Opcode_LDM(uint8_t opcode) // 3c
 {
+    (void)opcode;
     uint8_t val = SM_ReadAdvance();
     SM_Write(SM_ReadAdvance(), val);
 }
@@ -583,16 +580,19 @@ void SM_Opcode_LDA(uint8_t opcode) // a9, a5, b5, ad, bd, b9, a1, b1
 
 void SM_Opcode_CLI(uint8_t opcode) // 58
 {
+    (void)opcode;
     SM_SetStatus(0, SM_STATUS_I);
 }
 
 void SM_Opcode_STP(uint8_t opcode) // 42
 {
+    (void)opcode;
     sm.sleep = 1;
 }
 
 void SM_Opcode_PHA(uint8_t opcode) // 48
 {
+    (void)opcode;
     SM_PushStack(sm.a);
 }
 
@@ -631,6 +631,7 @@ void SM_Opcode_SEB_CLB(uint8_t opcode)
 
 void SM_Opcode_RTI(uint8_t opcode) // 40
 {
+    (void)opcode;
     sm.sr = SM_PopStack();
     sm.pc = SM_PopStack();
     sm.pc |= SM_PopStack() << 8;
@@ -638,12 +639,14 @@ void SM_Opcode_RTI(uint8_t opcode) // 40
 
 void SM_Opcode_PLA(uint8_t opcode) // 68
 {
+    (void)opcode;
     sm.a = SM_PopStack();
     SM_Update_NZ(sm.a);
 }
 
 void SM_Opcode_BRA(uint8_t opcode) // 80
 {
+    (void)opcode;
     int8_t disp = SM_ReadAdvance();
     sm.pc += disp;
 }
@@ -706,6 +709,7 @@ void SM_Opcode_CMP(uint8_t opcode) // c9, c5, d5, cd, dd, d9, c1, d1
 
 void SM_Opcode_BNE(uint8_t opcode) // d0
 {
+    (void)opcode;
     int8_t diff = SM_ReadAdvance();
     if ((sm.sr & SM_STATUS_Z) == 0)
         sm.pc += diff;
@@ -713,6 +717,7 @@ void SM_Opcode_BNE(uint8_t opcode) // d0
 
 void SM_Opcode_RTS(uint8_t opcode) // 60
 {
+    (void)opcode;
     sm.pc = SM_PopStack();
     sm.pc |= SM_PopStack() << 8;
 }
@@ -822,6 +827,7 @@ void SM_Opcode_DEC(uint8_t opcode) // 1a, c6, d6, ce, de
 
 void SM_Opcode_TAX(uint8_t opcode) // aa
 {
+    (void)opcode;
     sm.x = sm.a;
     SM_Update_NZ(sm.x);
 }
@@ -847,15 +853,18 @@ void SM_Opcode_STX(uint8_t opcode) // 86 96 8e
 
 void SM_Opcode_SEC(uint8_t opcode) // 38
 {
+    (void)opcode;
     SM_SetStatus(1, SM_STATUS_C);
 }
 
 void SM_Opcode_NOP(uint8_t opcode) // EA
 {
+    (void)opcode;
 }
 
 void SM_Opcode_BPL(uint8_t opcode) // 10
 {
+    (void)opcode;
     int8_t diff = SM_ReadAdvance();
     if ((sm.sr & SM_STATUS_N) == 0)
         sm.pc += diff;
@@ -863,6 +872,7 @@ void SM_Opcode_BPL(uint8_t opcode) // 10
 
 void SM_Opcode_CLC(uint8_t opcode) // 18
 {
+    (void)opcode;
     SM_SetStatus(0, SM_STATUS_C);
 }
 
@@ -1225,49 +1235,58 @@ void SM_StartVector(uint32_t vector)
     sm.pc = SM_GetVectorAddress(vector);
 }
 
-void SM_HandleInterrupt(void)
+inline void SM_HandleInterrupt(void)
 {
-    if (sm.sr & SM_STATUS_I)
-        return;
-    
-    if ((sm_device_mode[SM_DEV_UART1_CTRL] & 0x8) != 0
-        && (sm_device_mode[SM_DEV_INT_ENABLE] & 0x80) != 0
-        && (sm_device_mode[SM_DEV_INT_REQUEST] & 0x80) != 0)
+    uint8_t dev_int_request = sm_device_mode[SM_DEV_INT_REQUEST];
+    if (!dev_int_request) return;
+
+    uint8_t dev_int_enable = sm_device_mode[SM_DEV_INT_ENABLE];
+    if (dev_int_enable == 0x10 && dev_int_request == 0x08) return;
+
+    if (sm.sr & SM_STATUS_I) return;
+
+    uint8_t dev_timer_ctrl = sm_device_mode[SM_DEV_TIMER_CTRL];
+    if ((dev_timer_ctrl & 0x40) != 0
+        && (dev_int_enable & 0x8) != 0
+        && (dev_int_request & 0x8) != 0)
     {
-        sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x80;
-        SM_StartVector(SM_VECTOR_UART1_RX);
+        sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x8;
+        SM_StartVector(SM_VECTOR_TIMER_X);
         return;
     }
-    if ((sm_device_mode[SM_DEV_UART2_CTRL] & 0x8) != 0
-        && (sm_device_mode[SM_DEV_INT_ENABLE] & 0x40) != 0
-        && (sm_device_mode[SM_DEV_INT_REQUEST] & 0x40) != 0)
-    {
-        sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x40;
-        SM_StartVector(SM_VECTOR_UART2_RX);
-        return;
-    }
-    if ((sm_device_mode[SM_DEV_UART3_CTRL] & 0x8) != 0
-        && (sm_device_mode[SM_DEV_INT_ENABLE] & 0x20) != 0
-        && (sm_device_mode[SM_DEV_INT_REQUEST] & 0x20) != 0)
-    {
-        sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x20;
-        SM_StartVector(SM_VECTOR_UART3_RX);
-        return;
-    }
-    if ((sm_device_mode[SM_DEV_TIMER_CTRL] & 0x80) != 0
-        && (sm_device_mode[SM_DEV_INT_ENABLE] & 0x10) != 0
-        && (sm_device_mode[SM_DEV_INT_REQUEST] & 0x10) != 0)
+    if ((dev_timer_ctrl & 0x80) != 0
+        && (dev_int_enable & 0x10) != 0
+        && (dev_int_request & 0x10) != 0)
     {
         sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x10;
         SM_StartVector(SM_VECTOR_IPCM0);
         return;
     }
-    if ((sm_device_mode[SM_DEV_TIMER_CTRL] & 0x40) != 0
-        && (sm_device_mode[SM_DEV_INT_ENABLE] & 0x8) != 0
-        && (sm_device_mode[SM_DEV_INT_REQUEST] & 0x8) != 0)
+    uint8_t dev_uart2_ctrl = sm_device_mode[SM_DEV_UART2_CTRL];
+    if ((dev_uart2_ctrl & 0x8) != 0
+        && (dev_int_enable & 0x40) != 0
+        && (dev_int_request & 0x40) != 0)
     {
-        sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x8;
-        SM_StartVector(SM_VECTOR_TIMER_X);
+        sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x40;
+        SM_StartVector(SM_VECTOR_UART2_RX);
+        return;
+    }
+    uint8_t dev_uart1_ctrl = sm_device_mode[SM_DEV_UART1_CTRL];
+    if ((dev_uart1_ctrl & 0x8) != 0
+        && (dev_int_enable & 0x80) != 0
+        && (dev_int_request & 0x80) != 0)
+    {
+        sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x80;
+        SM_StartVector(SM_VECTOR_UART1_RX);
+        return;
+    }
+    uint8_t dev_uart3_ctrl = sm_device_mode[SM_DEV_UART3_CTRL];
+    if ((dev_uart3_ctrl & 0x8) != 0
+        && (dev_int_enable & 0x20) != 0
+        && (dev_int_request & 0x20) != 0)
+    {
+        sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x20;
+        SM_StartVector(SM_VECTOR_UART3_RX);
         return;
     }
     if ((sm_device_mode[SM_DEV_COLLISION] & 0xc0) == 0xc0)
@@ -1276,28 +1295,25 @@ void SM_HandleInterrupt(void)
         SM_StartVector(SM_VECTOR_COLLISION);
         return;
     }
-    if (((sm_device_mode[SM_DEV_UART1_CTRL] & 0x10) == 0
-        || (sm_cts & 1) != 0)
-        && (sm_device_mode[SM_DEV_INT_ENABLE] & 0x4) != 0
-        && (sm_device_mode[SM_DEV_INT_REQUEST] & 0x4) != 0)
+    if (((dev_uart1_ctrl & 0x10) == 0 || (sm_cts & 1) != 0)
+        && (dev_int_enable & 0x4) != 0
+        && (dev_int_request & 0x4) != 0)
     {
         sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x4;
         SM_StartVector(SM_VECTOR_UART1_TX);
         return;
     }
-    if (((sm_device_mode[SM_DEV_UART2_CTRL] & 0x10) == 0
-        || (sm_cts & 2) != 0)
-        && (sm_device_mode[SM_DEV_INT_ENABLE] & 0x2) != 0
-        && (sm_device_mode[SM_DEV_INT_REQUEST] & 0x2) != 0)
+    if (((dev_uart2_ctrl & 0x10) == 0 || (sm_cts & 2) != 0)
+        && (dev_int_enable & 0x2) != 0
+        && (dev_int_request & 0x2) != 0)
     {
         sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x2;
         SM_StartVector(SM_VECTOR_UART2_TX);
         return;
     }
-    if (((sm_device_mode[SM_DEV_UART3_CTRL] & 0x10) == 0
-        || (sm_cts & 4) != 0)
-        && (sm_device_mode[SM_DEV_INT_ENABLE] & 0x1) != 0
-        && (sm_device_mode[SM_DEV_INT_REQUEST] & 0x1) != 0)
+    if (((dev_uart3_ctrl & 0x10) == 0 || (sm_cts & 4) != 0)
+        && (dev_int_enable & 0x1) != 0
+        && (dev_int_request & 0x1) != 0)
     {
         sm_device_mode[SM_DEV_INT_REQUEST] &= ~0x1;
         SM_StartVector(SM_VECTOR_UART3_TX);
@@ -1305,11 +1321,11 @@ void SM_HandleInterrupt(void)
     }
 }
 
-void SM_UpdateTimer(void)
+inline void SM_UpdateTimer(void)
 {
-    while (sm_timer_cycles < sm.cycles)
+    if ((sm_device_mode[SM_DEV_TIMER_CTRL] & 0x20) == 0 && !sm.sleep)
     {
-        if ((sm_device_mode[SM_DEV_TIMER_CTRL] & 0x20) == 0 && !sm.sleep)
+        while (sm_timer_cycles < sm.cycles)
         {
             if (sm_timer_prescaler == 0)
             {
@@ -1325,22 +1341,28 @@ void SM_UpdateTimer(void)
             }
             else
                 sm_timer_prescaler--;
+
+            sm_timer_cycles += 16;
         }
-        sm_timer_cycles += 16;
+    } else {
+        uint64_t diff = sm.cycles - sm_timer_cycles;
+        if (diff)
+            sm_timer_cycles += 16 * (diff / 16) + (diff % 16 > 0 ? 16 : 0);
     }
 }
 
 void SM_UpdateUART(void)
 {
-    if ((sm_device_mode[SM_DEV_UART1_CTRL] & 4) == 0) // RX disabled
-        return;
     if (uart_write_ptr == uart_read_ptr) // no byte
         return;
 
-    if (uart_rx_gotbyte)
+    if (sm.cycles < uart_rx_delay)
         return;
 
-    if (sm.cycles < uart_rx_delay)
+    if ((sm_device_mode[SM_DEV_UART1_CTRL] & 4) == 0) // RX disabled
+        return;
+
+    if (uart_rx_gotbyte)
         return;
 
     uart_rx_byte = uart_buffer[uart_read_ptr];
@@ -1364,7 +1386,7 @@ void SM_Update(uint64_t cycles)
             SM_Opcode_Table[opcode](opcode);
         }
 
-        sm.cycles += 12 * 4; // FIXME
+        sm.cycles += 12 * 10; // FIXME
         
         SM_UpdateTimer();
         SM_UpdateUART();
